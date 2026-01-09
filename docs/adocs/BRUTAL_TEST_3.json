@@ -1,0 +1,14 @@
+{
+    "model": "LFM2",
+    "messages": [
+        {
+            "role": "user",
+            "content": "List 5 benefits of meditation"
+        }
+    ],
+    "mirostat": 2,
+    "mirostat_tau": 5.0,
+    "mirostat_eta": 0.1,
+    "max_tokens": 80,
+    "stream": false
+}

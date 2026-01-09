@@ -1,0 +1,73 @@
+[package]
+name = "exsa-engine"
+version.workspace = true
+edition.workspace = true
+authors = ["Exousia Team"]
+description = "Production-grade local LLM inference engine built on llama.cpp"
+license.workspace = true
+
+[[bin]]
+name = "exsa-engine"
+path = "src/main.rs"
+
+[[bin]]
+name = "benchmark"
+path = "src/bin/benchmark.rs"
+
+[dependencies]
+# CPU core detection
+num_cpus = "1.16"
+
+# llama.cpp Rust bindings with UNIVERSAL GPU support
+# NO DEFAULTS - Build script detects hardware and picks the right backend
+# Available backends: metal, cuda, hipblas (ROCm), vulkan, cpu-only
+llama-cpp-2 = { version = "0.1", default-features = false, optional = true }
+
+# HTTP server framework
+axum = { version = "0.7", features = ["macros"] }
+tokio = { version = "1.35", features = ["full"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Async utilities
+tokio-stream = "0.1"
+tokio-util = "0.7"
+futures = "0.3"
+async-stream = "0.3"
+
+# Logging and tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# UUID generation for request IDs
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# Configuration
+config = "0.14"
+
+# HTTP client (for benchmark utility)
+reqwest = { version = "0.11", features = ["stream", "json"] }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[features]
+# Default to CPU backend so `cargo check`/`cargo build` work without flags
+default = ["cpu"]
+
+# Explicit GPU backend passthroughs
+# When you enable exsa-engine/metal, it turns on llama-cpp-2/metal
+metal = ["llama-cpp-2/metal", "dep:llama-cpp-2"]
+cuda = ["llama-cpp-2/cuda", "dep:llama-cpp-2"]
+# rocm = ["llama-cpp-2/hipblas", "dep:llama-cpp-2"]  # Not available in 0.1.126
+vulkan = ["llama-cpp-2/vulkan", "dep:llama-cpp-2"]
+cpu = ["dep:llama-cpp-2"]  # Fallback CPU-only build

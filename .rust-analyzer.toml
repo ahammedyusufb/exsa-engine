@@ -1,0 +1,10 @@
+# Rust Analyzer Configuration for EXSA Engine
+# This tells rust-analyzer which features to enable for IDE support
+
+# Enable the metal feature by default for IDE analysis
+# Change this to "cuda", "vulkan", or "cpu" if you're on different hardware
+cargo.features = ["metal"]
+
+# Don't try to analyze all features at once
+checkOnSave.allFeatures = false
+cargo.allFeatures = false

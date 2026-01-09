@@ -1,0 +1,4 @@
+# Keep models directory but ignore model files
+*.gguf
+*.bin
+!.gitkeep

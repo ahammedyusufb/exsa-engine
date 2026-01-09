@@ -1,0 +1,12 @@
+{
+    "model": "LFM2-2.6B",
+    "messages": [
+        {
+            "role": "user",
+            "content": "Write a haiku about AI"
+        }
+    ],
+    "temperature": 0.8,
+    "max_tokens": 30,
+    "stream": false
+}
