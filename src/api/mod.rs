@@ -2,6 +2,7 @@ pub mod chat;
 pub mod handlers;
 pub mod lifecycle;
 pub mod openai;
+pub mod rag;
 pub mod routes;
 pub mod schema;
 

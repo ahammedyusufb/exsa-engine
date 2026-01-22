@@ -36,6 +36,7 @@ pub mod config;
 pub mod inference;
 pub mod metrics;
 pub mod model;
+pub mod rag;
 pub mod session;
 pub mod tests;
 pub mod utils;

@@ -109,6 +109,24 @@ impl InferenceEngine {
         }
     }
 
+    /// Get the currently active llama.cpp model.
+    pub fn active_llama_model(&self) -> Result<Arc<LlamaModel>> {
+        self.manager.get_active_model()
+    }
+
+    /// Get the llama.cpp backend handle.
+    pub fn llama_backend(&self) -> Arc<LlamaBackend> {
+        self.backend.clone()
+    }
+
+    /// Get a snapshot of the current model configuration.
+    pub fn current_model_config(&self) -> ModelConfig {
+        self.config
+            .read()
+            .map(|c| c.clone())
+            .unwrap_or_else(|_| ModelConfig::new("unknown"))
+    }
+
     /// Load a model into the cache (if needed) and switch it to active.
     ///
     /// This is CPU/IO heavy and should be called from a blocking context.
@@ -349,6 +367,7 @@ impl InferenceEngine {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn slide_kv_cache_front(
         ctx: &mut LlamaContext,
         kv_cache_pos: usize,
@@ -691,21 +710,39 @@ impl InferenceEngine {
                     kv_offset
                 );
 
-                let keep_tokens = ((context_limit as f32 * KEEP_RATIO) as usize).max(1);
-                let discard = kv_cache_pos.saturating_sub(keep_tokens);
+                // Preserve an initial prefix (typically the system prompt) when evicting.
+                // This prevents persona/identity drift when long contexts trigger KV sliding.
+                let mut n_keep = params.n_keep.unwrap_or(0);
+                if kv_cache_pos > 0 {
+                    n_keep = n_keep.min(kv_cache_pos.saturating_sub(1));
+                } else {
+                    n_keep = 0;
+                }
 
-                if discard > 0 && discard < kv_cache_pos {
+                let keep_tokens = ((context_limit as f32 * KEEP_RATIO) as usize).max(1);
+                let keep_total = keep_tokens.max(n_keep.saturating_add(1));
+                let shift_amount = kv_cache_pos.saturating_sub(keep_total);
+
+                if shift_amount > 0 && shift_amount < kv_cache_pos {
                     let started = std::time::Instant::now();
 
-                    match Self::slide_kv_cache_front(ctx, kv_cache_pos, discard) {
+                    match Self::slide_kv_cache_window(
+                        ctx,
+                        &mut cached_tokens,
+                        &mut kv_cache_pos,
+                        shift_amount,
+                        n_keep,
+                        context_limit,
+                    ) {
                         Ok(()) => {
-                            kv_offset += discard;
-                            kv_cache_pos = kv_cache_pos.saturating_sub(discard);
+                            // After preserving prefix, we no longer use an offset mapping.
+                            kv_offset = 0;
                             info!(
-                                "✅ Sliding window shift complete: new kv_pos={}, new offset={}, discarded {} tokens in {:?}",
+                                "✅ Sliding window shift complete: new kv_pos={}, new offset={}, removed {} tokens (n_keep={}) in {:?}",
                                 kv_cache_pos,
                                 kv_offset,
-                                discard,
+                                shift_amount,
+                                n_keep,
                                 started.elapsed()
                             );
                         }
@@ -714,29 +751,20 @@ impl InferenceEngine {
                                 "⚠️ Sliding window fast-shift failed ({err}). Falling back to rebuild."
                             );
 
-                            ctx.clear_kv_cache();
-
-                            let start_idx = kv_offset + discard;
-                            let end_idx = kv_offset + kv_cache_pos;
-                            if end_idx > cached_tokens.len() || start_idx >= end_idx {
-                                warn!(
-                                    "⚠️ Sliding window index error: start={}, end={}, cached_len={}",
-                                    start_idx,
-                                    end_idx,
-                                    cached_tokens.len()
-                                );
-                                let _ = completion_tx
-                                    .send(Err("Sliding window rebuild failed: invalid indices"
-                                        .to_string()));
-                                continue 'request_loop;
+                            // Rebuild a trimmed token history that preserves [0, n_keep) and drops the next shift_amount tokens.
+                            let mut rebuilt_tokens = cached_tokens.clone();
+                            let drain_start = n_keep.min(rebuilt_tokens.len());
+                            let drain_end = (n_keep + shift_amount).min(rebuilt_tokens.len());
+                            if drain_start < drain_end {
+                                rebuilt_tokens.drain(drain_start..drain_end);
                             }
 
-                            let tokens_to_keep = &cached_tokens[start_idx..end_idx];
+                            ctx.clear_kv_cache();
                             if let Err(rebuild_err) = Self::rebuild_kv_cache_from_tokens(
                                 ctx,
                                 &mut batch,
                                 batch_size,
-                                tokens_to_keep,
+                                &rebuilt_tokens,
                             ) {
                                 warn!("⚠️ Sliding window rebuild decode failed: {rebuild_err}");
                                 let _ = completion_tx.send(Err(format!(
@@ -745,13 +773,15 @@ impl InferenceEngine {
                                 continue 'request_loop;
                             }
 
-                            kv_offset += discard;
-                            kv_cache_pos = tokens_to_keep.len();
+                            cached_tokens = rebuilt_tokens;
+                            kv_cache_pos = cached_tokens.len();
+                            kv_offset = 0;
                             info!(
-                                "✅ Sliding window rebuild complete: new kv_pos={}, new offset={}, discarded {} tokens in {:?}",
+                                "✅ Sliding window rebuild complete: new kv_pos={}, new offset={}, removed {} tokens (n_keep={}) in {:?}",
                                 kv_cache_pos,
                                 kv_offset,
-                                discard,
+                                shift_amount,
+                                n_keep,
                                 started.elapsed()
                             );
                         }

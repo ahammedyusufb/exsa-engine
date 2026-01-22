@@ -4,6 +4,7 @@
 //! to enable ecosystem integration with LangChain, AutoGen, SillyTavern, etc.
 
 use crate::inference::templates::ChatMessage;
+use crate::rag::models::RagChatOptions;
 use serde::{Deserialize, Serialize};
 
 /// OpenAI chat completion request
@@ -57,6 +58,45 @@ pub struct ChatCompletionRequest {
 
     /// User identifier (optional)
     pub user: Option<String>,
+
+    /// Optional EXSA extension: Retrieval-Augmented Generation controls.
+    #[serde(default)]
+    pub rag: Option<RagChatOptions>,
+}
+
+/// OpenAI-compatible embeddings request.
+///
+/// This is used by EXSA RAG to compute embeddings locally via llama.cpp.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EmbeddingsRequest {
+    /// Model identifier (accepted for compatibility; EXSA uses the active model)
+    pub model: Option<String>,
+
+    /// The input text(s) to embed.
+    ///
+    /// OpenAI accepts a string or an array of strings.
+    pub input: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EmbeddingsResponse {
+    pub object: String,
+    pub model: String,
+    pub data: Vec<EmbeddingItem>,
+    pub usage: Option<EmbeddingsUsage>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EmbeddingItem {
+    pub object: String,
+    pub index: usize,
+    pub embedding: Vec<f32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EmbeddingsUsage {
+    pub prompt_tokens: usize,
+    pub total_tokens: usize,
 }
 
 /// OpenAI chat completion response

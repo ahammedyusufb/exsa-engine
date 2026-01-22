@@ -194,10 +194,42 @@ async fn main() {
 
     // Create application state with shutdown coordination
     let shutdown_flag = Arc::new(AtomicBool::new(false));
+
+    // Optional RAG service
+    let rag_cfg = exsa_engine::rag::RagConfig::from_env();
+    let rag = if rag_cfg.enabled {
+        info!("🧠 RAG enabled: initializing Postgres + Qdrant");
+        let timeout = std::time::Duration::from_secs(rag_cfg.init_timeout_secs.max(1));
+        match tokio::time::timeout(timeout, exsa_engine::rag::RagService::new(rag_cfg)).await {
+            Ok(Ok(r)) => {
+                info!("✅ RAG initialized");
+                Some(r)
+            }
+            Ok(Err(e)) => {
+                error!("❌ RAG initialization failed: {}", e);
+                error!(
+                    "Continuing without RAG. Fix RAG env/Docker, or set EXSA_RAG_ENABLED=false."
+                );
+                None
+            }
+            Err(_) => {
+                error!(
+                    "❌ RAG initialization timed out after {:?}. Continuing without RAG.",
+                    timeout
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let app_state = AppState {
         queue: queue_handle,
         engine: engine.clone(),
+        rag,
         model_switch_lock: Arc::new(tokio::sync::Mutex::new(())),
+        embeddings_lock: Arc::new(tokio::sync::Mutex::new(())),
         shutdown_flag: shutdown_flag.clone(),
         start_time: std::time::Instant::now(),
     };

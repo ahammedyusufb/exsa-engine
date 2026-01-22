@@ -1,48 +1,95 @@
 # EXSA Engine
 
-EXSA Engine is a local LLM inference server written in Rust, built on top of llama.cpp via `llama-cpp-2`. It’s designed to be fast, configurable, and easy to integrate (OpenAI-style chat completions, streaming-first), while keeping a secure default posture (localhost-only, CORS off).
+EXSA Engine is a production-grade local LLM inference server written in Rust, built on top of llama.cpp via `llama-cpp-2`.
+It provides a **streaming-first OpenAI-compatible API**, **GGUF-native model lifecycle controls**, and **optional built-in RAG** (Postgres + optional Qdrant + embeddings) for retrieval-augmented chat.
 
-## What you get
+This README documents the **engine only** so the `exsa-engine/` directory can be published as a standalone open-source repository.
 
-- **Local inference API**: HTTP server with streaming responses (SSE)
-- **OpenAI-style chat completions**: `/v1/chat/completions` for ecosystem compatibility
-- **Prompt templating**: model-aware templates (e.g. ChatML/Llama-style) + template stop-sequences
-- **Hardware-aware builds**: auto-select backend (Metal/CUDA/Vulkan/CPU) from a single build command
-- **Operational controls**: request queue, health/status endpoints, optional rate limiting
-- **Model lifecycle**: list models on disk and switch models at runtime (GGUF only)
+---
+
+## Why EXSA Engine (GGUF-first)
+
+EXSA is designed around the GGUF ecosystem and the realities of running models locally:
+
+- **GGUF compatibility**: load and serve any GGUF model supported by llama.cpp (architectures + quantizations supported upstream).
+- **Streaming-first**: Server-Sent Events (SSE) by default for low latency and smooth UI integration.
+- **Hardware-aware builds**: one build command that chooses the best backend (Metal/CUDA/Vulkan/CPU) for your machine.
+- **Operational safety**: request queue, optional rate limiting, and safe model path rules for runtime model switching.
+- **RAG that works in production**: ingestion + retrieval endpoints and per-request RAG injection with prompt-injection guardrails.
+
+If you want the engine to “feel” fast, the defaults emphasize:
+
+- stable concurrency (queue + backpressure)
+- predictable latency (timeouts, bounded buffers)
+- sane prompt construction (template selection + stop sequences)
+
+---
+
+## Feature summary
+
+### Inference & API
+
+- **OpenAI-style chat completions**: `POST /v1/chat/completions` (SSE streaming)
+- **Embeddings endpoint**: `POST /v1/embeddings` (OpenAI-compatible request/response)
+- **Legacy generation endpoint**: `POST /v1/generate` (SSE streaming)
+- **Health & status**: `GET /v1/health`, `GET /v1/status`
+
+### Model lifecycle (GGUF)
+
+- **List models on disk**: `GET /v1/models/list`
+- **Inspect active model**: `GET /v1/models/active`, `GET /v1/model/info`
+- **Switch models at runtime**: `POST /v1/models/load` (restricted to models directory)
+- **Reload active model**: `POST /v1/models/reload`
+
+### Built-in RAG (optional)
+
+- **Document ingestion** into Postgres (chunked, deduplicated)
+- **Retrieval** via:
+  - **Vector mode**: embeddings + Qdrant (Cosine distance)
+  - **Lexical mode**: Postgres full-text search (no embeddings/Qdrant)
+- **Per-request injection** into chat via `rag` options on `/v1/chat/completions`
+- **RAG APIs**: status, ingest, list, delete, search
+
+---
 
 ## Platform & backend support
 
-Backends are compile-time selected through Cargo features and the build script:
+Backends are compile-time selected through Cargo features, with `build-engine.sh` doing automatic detection:
 
-- **macOS Apple Silicon**: Metal
-- **Linux / Windows (with CUDA toolkit)**: CUDA (detected via `nvcc`)
-- **Cross-platform**: Vulkan (if available)
-- **Fallback**: CPU
+- macOS Apple Silicon: **Metal**
+- Linux / Windows (with CUDA toolkit): **CUDA** (detected via `nvcc`)
+- Cross-platform: **Vulkan** (if available)
+- Fallback: **CPU**
 
-Note: ROCm/HIP is currently not enabled in this crate’s Cargo features (dependency support is version-dependent).
+Notes:
+
+- ROCm/HIP may be available in llama.cpp, but is currently not enabled in this crate’s feature set (dependency-version dependent).
+
+---
 
 ## Requirements
 
 ### Build requirements
 
 - Rust toolchain (`cargo`): https://rustup.rs/
-- **CMake** (required by llama.cpp native build)
+- `cmake` (required to build llama.cpp)
 - A C/C++ toolchain
   - macOS: Xcode Command Line Tools (`xcode-select --install`)
-  - Linux: `build-essential` / gcc + make (varies by distro)
+  - Linux: distro build tools (e.g. `build-essential`)
 
-The build script will fail fast with clear instructions if `cmake` is missing.
+The build script fails fast with clear install instructions if `cmake` is missing.
 
 ### Runtime requirements
 
 - A local **GGUF** model file
 
+---
+
 ## Quick start
 
-### 1) Build
+### 1) Build (recommended)
 
-Automatic hardware detection (recommended):
+Automatic hardware detection:
 
 ```bash
 ./build-engine.sh
@@ -70,7 +117,7 @@ Health check:
 curl http://127.0.0.1:3000/v1/health
 ```
 
-### 3) Send a chat request (streaming)
+### 3) Chat (OpenAI-compatible, streaming)
 
 ```bash
 curl -N -X POST http://127.0.0.1:3000/v1/chat/completions \
@@ -83,16 +130,16 @@ curl -N -X POST http://127.0.0.1:3000/v1/chat/completions \
   }'
 ```
 
-This endpoint returns **SSE** events with JSON chunks (`chat.completion.chunk`). A final chunk is emitted with `finish_reason: "stop"`.
+---
 
-## Configuration
+## Configuration (environment variables)
 
-EXSA Engine is configured mainly via environment variables.
+EXSA Engine is configured primarily via environment variables.
 
-### Core
+### Core inference
 
-- `MODEL_PATH` (required): path to the GGUF model to load on startup
-- `GPU_LAYERS` (default: `0`): number of layers to place on GPU (backend dependent)
+- `MODEL_PATH` (required): path to the GGUF model to load
+- `GPU_LAYERS` (default: `0`): number of layers to offload to GPU (backend-dependent)
 - `CONTEXT_SIZE` (default: `4096`)
 - `BATCH_SIZE` (default: `CONTEXT_SIZE`)
 
@@ -100,6 +147,7 @@ EXSA Engine is configured mainly via environment variables.
 
 - `HOST` (default: `127.0.0.1`): bind address (`0.0.0.0` enables LAN access)
 - `PORT` (default: `3000`)
+- `MAX_QUEUE_SIZE` (default: `100`)
 - `ENABLE_CORS` (default: `false`)
 
 ### Rate limiting (optional)
@@ -108,17 +156,17 @@ EXSA Engine is configured mainly via environment variables.
 - `RATE_LIMIT_MAX` (default: `60`)
 - `RATE_LIMIT_WINDOW` (default: `60` seconds)
 
-### Queueing
-
-- `MAX_QUEUE_SIZE` (default: `100`)
-
 ### Continuous batching (optional)
+
+These toggles control server-side request batching behavior.
 
 - `ENABLE_CONTINUOUS_BATCHING` (default: `false`)
 - `MAX_BATCH_SIZE` (default: `8`)
 - `BATCH_TIMEOUT_MS` (default: `100`)
 
-## API
+---
+
+## API specification
 
 ### Endpoints
 
@@ -127,23 +175,116 @@ EXSA Engine is configured mainly via environment variables.
 | `/v1/health` | GET | Health + uptime + queue stats |
 | `/v1/status` | GET | Lightweight server status |
 | `/v1/model/info` | GET | Current model info |
-| `/v1/generate` | POST | Streaming SSE token events (legacy-style) |
+| `/v1/generate` | POST | Streaming SSE token events |
 | `/v1/chat/completions` | POST | OpenAI-style streaming chat completions |
+| `/v1/embeddings` | POST | OpenAI-compatible embeddings endpoint |
 | `/v1/models/list` | GET | Lists `.gguf` files under the models directory |
 | `/v1/models/active` | GET | Active model metadata |
-| `/v1/models/load` | POST | Switch model (only `.gguf`, only inside models dir) |
+| `/v1/models/load` | POST | Switch model (GGUF only, within models dir) |
 | `/v1/models/reload` | POST | Reload current model |
-| `/v1/models/unload` | POST | Currently not supported |
+| `/v1/models/unload` | POST | Not supported |
+| `/v1/rag/status` | GET | RAG status + active defaults |
+| `/v1/rag/documents` | GET | List documents (`kb`, `limit`) |
+| `/v1/rag/documents` | POST | Ingest a document (multipart) |
+| `/v1/rag/documents/:id` | DELETE | Delete document (also deletes vectors if enabled) |
+| `/v1/rag/search` | POST | Search chunks (lexical or vector mode) |
 
-### Models directory rules
+### Models directory rules (runtime switching)
 
 For safety, model switching is restricted:
 
 - Only `.gguf` models are accepted
-- Model paths must be inside the resolved models directory
+- Model paths must be inside the resolved models directory:
   - set `MODELS_DIR`, or
   - use `./models` or `../models`
-- Model switching/reloading is rejected while requests are queued
+- Switching/reloading is rejected while requests are queued
+
+---
+
+## RAG (Retrieval-Augmented Generation)
+
+EXSA Engine includes an **optional, built-in RAG service**. When enabled, it provides ingestion + retrieval endpoints and can inject retrieved context into `/v1/chat/completions`.
+
+### What “built-in RAG” means here
+
+- **Storage/metadata**: Postgres (documents + chunks + dedup)
+- **Retrieval**:
+  - **Vector mode**: embeddings + Qdrant
+  - **Lexical mode**: Postgres full-text search only
+- **Injection**: retrieved chunks are inserted as a `system` message marked as **UNTRUSTED** reference material (prompt-injection guardrail).
+
+### Enable RAG (minimum)
+
+RAG requires Postgres.
+
+```bash
+export EXSA_RAG_ENABLED=true
+export EXSA_RAG_POSTGRES_URL="postgres://user:pass@127.0.0.1:5432/exsa"
+```
+
+If you also want vector search, enable Qdrant + an embeddings provider:
+
+```bash
+export EXSA_RAG_VECTOR_SEARCH_ENABLED=true
+export EXSA_RAG_QDRANT_URL="http://127.0.0.1:6333"
+export EXSA_RAG_EMBEDDINGS_URL="http://127.0.0.1:3000/v1/embeddings"
+```
+
+If you want **maximum stability on macOS/Metal**, consider running embeddings on a **separate CPU-only engine instance** (or set `EXSA_RAG_VECTOR_SEARCH_ENABLED=false` for lexical-only retrieval).
+
+### RAG configuration
+
+- `EXSA_RAG_ENABLED` (default: `false`)
+- `EXSA_RAG_POSTGRES_URL` (required when enabled)
+- `EXSA_RAG_VECTOR_SEARCH_ENABLED` (default: `true`)
+- `EXSA_RAG_QDRANT_URL` (required when vector mode enabled)
+- `EXSA_RAG_QDRANT_COLLECTION` (default: `exsa_rag_chunks`)
+- `EXSA_RAG_EMBEDDINGS_URL` (required when vector mode enabled)
+- `EXSA_RAG_EMBEDDINGS_MODEL` (optional)
+- `EXSA_RAG_DEFAULT_KB` (default: `default`)
+- `EXSA_RAG_CHUNK_MAX_CHARS` (default: `1400`)
+- `EXSA_RAG_CHUNK_OVERLAP_CHARS` (default: `200`)
+- `EXSA_RAG_RETRIEVE_TOP_K` (default: `6`)
+- `EXSA_RAG_MAX_CONTEXT_CHARS` (default: `8000`)
+- `EXSA_RAG_INIT_TIMEOUT_SECS` (default: `15`)
+- `EXSA_RAG_PG_CONNECT_TIMEOUT_SECS` (default: `5`)
+- `EXSA_RAG_PG_ACQUIRE_TIMEOUT_SECS` (default: `5`)
+- `EXSA_RAG_HTTP_TIMEOUT_SECS` (default: `10`)
+
+### Ingest a document
+
+The ingest endpoint accepts multipart form data with either `file` or `text`.
+
+```bash
+curl -X POST "http://127.0.0.1:3000/v1/rag/documents?kb=default&title=MyDoc" \
+  -F "file=@./README.md" \
+  -F "source_name=README.md"
+```
+
+### Search
+
+```bash
+curl -X POST http://127.0.0.1:3000/v1/rag/search \
+  -H "Content-Type: application/json" \
+  -d '{"query":"what is the build command?","kb":"default","top_k":6}'
+```
+
+### Use RAG in chat completions
+
+Add a `rag` object to the request body; the engine uses the last user message as the retrieval query.
+
+```bash
+curl -N -X POST http://127.0.0.1:3000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local-model",
+    "messages": [{"role":"user","content":"Summarize how to build the engine."}],
+    "stream": true,
+    "rag": {"enabled": true, "kb": "default", "top_k": 6}
+  }'
+```
+
+---
 
 ## Build options
 
@@ -170,30 +311,34 @@ make cpu
 BUILD_TYPE=debug ./build-engine.sh
 ```
 
-## Performance & footprint
+For details on the build system, see `BUILD_SYSTEM.md`.
 
-Performance depends heavily on the model, quantization, context size, GPU layers, and hardware.
+---
 
-- This repository includes performance notes and logs under:
-  - `docs/`
-  - `PERFORMANCE_TEST_LOG.md`
+## Performance & benchmarking
 
-Binary size also depends on target/backends. To check your local build:
+Performance depends on model architecture, quantization, context size, GPU layers, and hardware.
 
-```bash
-ls -lh target/release/exsa-engine
-```
+- Performance notes and benchmarks: `docs/PERFORMANCE_METRICS.md`
+- Build + backend analysis: `docs/BUILD_SCRIPT_EXPLAINED.md`
+- Competitive notes: `docs/COMPETITIVE_ANALYSIS.md`
+- Raw logs: `PERFORMANCE_TEST_LOG.md`
 
-## RAG (Retrieval-Augmented Generation)
+The repository also includes a `benchmark` binary for local testing.
 
-EXSA Engine focuses on fast local inference and an API surface that is easy to plug into other tools.
+---
 
-- It **does not ship a built-in vector database** or a complete “RAG pipeline” inside the engine.
-- You can implement RAG in your app (LangChain/LlamaIndex/etc.) and point it to EXSA Engine’s OpenAI-style endpoint.
+## Security & operational notes
+
+- Default bind is **localhost** (`127.0.0.1`) and **CORS is off**.
+- Model switching is restricted to a models directory to prevent arbitrary file access.
+- Retrieved RAG text is treated as **untrusted** and injected with explicit “do not follow instructions” guardrails.
+
+---
 
 ## Troubleshooting
 
-### Build fails complaining about CMake
+### Build fails due to missing CMake
 
 Install `cmake` and retry. On macOS:
 
@@ -210,12 +355,11 @@ Provide a GGUF model path:
 MODEL_PATH="models/your-model.gguf" ./target/release/exsa-engine
 ```
 
-### “OpenAI compatible” but my client doesn’t work
+### My OpenAI client doesn’t work
 
-The server is **streaming-first**. Some OpenAI clients expect non-streaming responses or a `[DONE]` sentinel.
+The engine is **streaming-first**. If your client expects a fully-buffered response or strict OpenAI streaming sentinels, you may need a small adapter/proxy.
 
-- Use streaming (`stream: true`) when possible.
-- If your client requires strict OpenAI semantics, you may need a small adapter/proxy.
+---
 
 ## License
 

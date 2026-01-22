@@ -1,6 +1,7 @@
 //! API request/response schemas
 
 use crate::inference::{InferenceEngine, QueueHandle, SamplingParams};
+use crate::rag::RagService;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -10,8 +11,14 @@ pub struct AppState {
     pub queue: QueueHandle,
     pub engine: Arc<InferenceEngine>,
 
+    /// Optional Retrieval-Augmented Generation service.
+    pub rag: Option<Arc<RagService>>,
+
     /// Serialize model switching/loading operations
     pub model_switch_lock: Arc<tokio::sync::Mutex<()>>,
+
+    /// Serialize embeddings requests (llama.cpp backends can be sensitive to concurrent contexts).
+    pub embeddings_lock: Arc<tokio::sync::Mutex<()>>,
 
     /// Shutdown flag for graceful shutdown coordination
     pub shutdown_flag: Arc<std::sync::atomic::AtomicBool>,

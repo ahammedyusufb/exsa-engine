@@ -36,6 +36,9 @@ pub enum ExsaError {
     #[error("Queue is full")]
     QueueFull,
 
+    #[error("Service unavailable: {0}")]
+    ServiceUnavailable(String),
+
     #[error("No model loaded")]
     ModelNotLoaded,
 
@@ -60,6 +63,7 @@ impl IntoResponse for ExsaError {
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Server is at capacity".to_string(),
             ),
+            ExsaError::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg),
             ExsaError::ModelNotLoaded => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "No model loaded".to_string(),
